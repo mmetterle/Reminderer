@@ -112,39 +112,6 @@ public class MetaGrammarParser {
 	}
     }
 
-    static public class Task {
-	String task;
-	// meeting variables
-	Date date;
-	Date time;
-	Date duration;
-	// AlarmManager just needs a time to schedule the alarm
-	Repeats repeats;
-	RepeatsEvery repeatsEvery;
-	String location;
-
-	public String toString() {
-	    String out = "";
-	    out += "Task: " + ((task == null) ? "n/a" : task) + "\n";
-	    out += "Date: " + ((date == null) ? "n/a" : date.toLocaleString())
-		    + "\n";
-	    out += "Time: " + ((time == null) ? "n/a" : time.toLocaleString())
-		    + "\n";
-	    out += "RepeatDuration: "
-		    + ((duration == null) ? "n/a" : duration.toLocaleString())
-		    + "\n";
-	    out += "Repeats: " + ((repeats == null) ? "n/a" : repeats.name())
-		    + "\n";
-	    out += "RepeatsEvery: "
-		    + ((repeatsEvery == null) ? "n/a" : repeatsEvery.name())
-		    + "\n";
-	    out += "Location: " + ((location == null) ? "n/a" : location)
-		    + "\n";
-	    return out;
-	}
-
-    }
-
     Task task = new Task();
     GrammarContext context;
     Context androidContext;
@@ -153,6 +120,8 @@ public class MetaGrammarParser {
 
     Finder lBracket, rBracket, lParens, rParens;
     Finder nextWhiteSpace, whiteSpace;
+
+    boolean locationRecursion = false; // hack to prevent infinite recursion
 
     public MetaGrammarParser() {
 	lBracket = new Finder("\\[");
@@ -175,6 +144,7 @@ public class MetaGrammarParser {
 
     // expr: task | task commands
     public Task parse(String input) {
+	task = new Task();
 	context = new GrammarContext(input.trim());
 	int curPos = 0;
 	while (commands() == null) { // current pos is not a command so
@@ -212,7 +182,7 @@ public class MetaGrammarParser {
 	return null;
     }
 
-    // command: time | date | next | repeats | location #list of commands
+    // command: taskTime | date | next | repeats | location #list of commands
     Task command() {
 	int curPos = context.getPos();
 	if (time() != null || date() != null || next() != null
@@ -225,7 +195,7 @@ public class MetaGrammarParser {
 	}
     }
 
-    // time: timeParser | "at" timeParser
+    // taskTime: timeParser | "at" timeParser
     Task time() {
 	int curPos = context.getPos();
 	// TODO - pull out
@@ -240,7 +210,8 @@ public class MetaGrammarParser {
 	if (whiteSpace.find(context))
 	    context.gobble(whiteSpace);
 	if (timeParser.find(context)) {
-	    task.time = timeParser.parse(context);
+	    Date time = timeParser.parse(context);
+	    task.setTime(time);
 	    return task;
 	} else
 	    context.setPos(curPos);
@@ -251,7 +222,8 @@ public class MetaGrammarParser {
     Task date() {
 	int curPos = context.getPos();
 	// TODO - pull out
-	GrammarClasses.Date timeParser = new GrammarClasses.Date(androidContext);
+	GrammarClasses.Date dateParser = new GrammarClasses.Date(androidContext);
+	GrammarClasses.Day dayParser = new GrammarClasses.Day(androidContext);
 	Finder at = new Finder("at");
 	Finder on = new Finder("on");
 	if (at.find(context)) // "at" found
@@ -261,11 +233,16 @@ public class MetaGrammarParser {
 	// gobble whitespace
 	if (whiteSpace.find(context))
 	    context.gobble(whiteSpace);
-	if (timeParser.find(context)) {
-	    task.date = timeParser.parse(context);
+	if (dateParser.find(context)) {
+	    Date date = dateParser.parse(context);
+	    task.setDate(date);
 	    return task;
-	} else
-	    context.setPos(curPos);
+	} else if (dayParser.find(context)) {
+	    Date day = dayParser.parse(context);
+	    task.setDay(day);
+	    return task;
+	}
+	else context.setPos(curPos);
 	return null;
     }
 
@@ -277,15 +254,16 @@ public class MetaGrammarParser {
 	    return null;
 	int curPos = context.getPos();
 	context.gobble(next);
-	//eat whitespace
+	// eat whitespace
 	if (whiteSpace.find(context))
 	    context.gobble(whiteSpace);
-	GrammarClasses.Day timeParser = new GrammarClasses.Day(androidContext);
-	if (!timeParser.find(context)) {
+	GrammarClasses.Day dayParser = new GrammarClasses.Day(androidContext);
+	if (!dayParser.find(context)) {
 	    context.setPos(curPos);
 	    return null;
 	}
-	task.date = timeParser.parse(context);
+	Date day = dayParser.parse(context);
+	task.setNextDay(day);
 	return task;
     }
 
@@ -335,25 +313,36 @@ public class MetaGrammarParser {
 	// TODO day
 	GrammarClasses.Day dayParser = new GrammarClasses.Day(androidContext);
 	// if (dayParser.find(context))
-	// TODO time duration
+	// TODO taskTime duration
 	return null;
     }
 
     // location: "at" locationString
     Task location() {
+	if (locationRecursion)
+	    return null;
 	Finder at = new Finder("at");
 	if (!at.find(context))
 	    return null;
 	int curPos = context.getPos();
 	context.gobble(at);
-	String location = "";
 	int len = context.getPos();
+	String location = "";
+	// enter recursion
+	locationRecursion = true;
 	while (command() == null) {
-	    // get gobbled string
-	    location += context.getOriginal().substring(len, context.getPos());
-	    // update len
-	    len = context.getPos();
+	    // gobble token
+	    if (nextWhiteSpace.find(context)) {
+		context.gobble(nextWhiteSpace);
+		// get gobbled string
+		location += context.getOriginal().substring(len,
+			context.getPos());
+		// update len
+		len = context.getPos();
+	    }// if no whitespace found then we've reached end
 	}
+	// exit recursion
+	locationRecursion = false;
 	// check that location isnt null
 	if (location.trim().equals("")) {
 	    context.setPos(curPos);
